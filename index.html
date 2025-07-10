@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Share My Availability</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { Calendar, Clock, Copy, Check, User, Users } = lucide;
+
+        const TimezoneScheduler = () => {
+          const [selectedSlots, setSelectedSlots] = useState([]);
+          const [viewerTimezone, setViewerTimezone] = useState('');
+          const [sharerTimezone, setSharerTimezone] = useState('');
+          const [weekStart, setWeekStart] = useState(new Date());
+          const [shareLink, setShareLink] = useState('');
+          const [copied, setCopied] = useState(false);
+          const [isViewingSharedAvailability, setIsViewingSharedAvailability] = useState(false);
+          const [sharerCurrentTime, setSharerCurrentTime] = useState(new Date());
+          const scrollContainerRef = useRef(null);
+
+          // Get popular timezones with UTC offsets
+          const getPopularTimezones = () => {
+            const popularZones = [
+              'America/Los_Angeles',
+              'America/Denver', 
+              'America/Chicago',
+              'America/New_York',
+              'America/Toronto',
+              'Europe/London',
+              'Europe/Paris',
+              'Europe/Berlin',
+              'Europe/Rome',
+              'Europe/Madrid',
+              'Europe/Amsterdam',
+              'Europe/Stockholm',
+              'Europe/Reykjavik',
+              'Asia/Tokyo',
+              'Asia/Shanghai',
+              'Asia/Hong_Kong',
+              'Asia/Singapore',
+              'Asia/Mumbai',
+              'Asia/Dubai',
+              'Australia/Sydney',
+              'Australia/Melbourne',
+              'Pacific/Auckland',
+              'America/Sao_Paulo',
+              'America/Mexico_City',
+              'Africa/Cairo',
+              'UTC'
+            ];
+
+            const now = new Date();
+            return popularZones.map(zone => {
+              try {
+                const formatter = new Intl.DateTimeFormat('en', {
+                  timeZone: zone,
+                  timeZoneName: 'longOffset'
+                });
+                const parts = formatter.formatToParts(now);
+                const offset = parts.find(part => part.type === 'timeZoneName')?.value || '';
+                
+                // Get city name
+                const cityName = zone.split('/').pop().replace('_', ' ');
+                const regionName = zone.split('/')[0].replace('_', ' ');
+                
+                return {
+                  value: zone,
+                  label: `${cityName} (${offset})`,
+                  region: regionName,
+                  offset
+                };
+              } catch (e) {
+                return null;
+              }
+            }).filter(Boolean).sort((a, b) => {
+              // Sort by region first, then by city name
+              if (a.region !== b.region) {
+                const regionOrder = ['America', 'Europe', 'Asia', 'Australia', 'Pacific', 'Africa'];
+                return regionOrder.indexOf(a.region) - regionOrder.indexOf(b.region);
+              }
+              return a.label.localeCompare(b.label);
+            });
+          };
+
+          // Detect user's timezone
+          const getUserTimezone = () => {
+            return Intl.DateTimeFormat().resolvedOptions().timeZone;
+          };
+
+          // Update sharer's current time every minute
+          useEffect(() => {
+            if (isViewingSharedAvailability && sharerTimezone) {
+              const updateTime = () => {
+                setSharerCurrentTime(new Date());
+              };
+              
+              updateTime(); // Initial update
+              const interval = setInterval(updateTime, 60000); // Update every minute
+              
+              return () => clearInterval(interval);
+            }
+          }, [isViewingSharedAvailability, sharerTimezone]);
+
+          // Get current week's Monday
+          useEffect(() => {
+            const userTz = getUserTimezone();
+            setViewerTimezone(userTz);
+            
+            const today = new Date();
+            const monday = new Date(today);
+            monday.setDate(today.getDate() - today.getDay() + 1);
+            monday.setHours(0, 0, 0, 0);
+            setWeekStart(monday);
+            
+            // Load from URL parameters
+            const params = new URLSearchParams(window.location.search);
+            const slotsParam = params.get('slots');
+            const sharerTzParam = params.get('sharer_tz');
+            
+            if (slotsParam) {
+              try {
+                const slots = JSON.parse(decodeURIComponent(slotsParam));
+                setSelectedSlots(slots);
+                setIsViewingSharedAvailability(true);
+              } catch (e) {
+                console.error('Invalid slots parameter');
+              }
+            }
+            
+            if (sharerTzParam) {
+              setSharerTimezone(decodeURIComponent(sharerTzParam));
+            } else {
+              setSharerTimezone(userTz); // Default to user's timezone for new links
+            }
+          }, []);
+
+          // Auto-scroll to 7am on load
+          useEffect(() => {
+            if (scrollContainerRef.current) {
+              // Each hour row is h-12 (48px), so 7am is at 7 * 48 = 336px
+              const scrollPosition = 7 * 48;
+              scrollContainerRef.current.scrollTop = scrollPosition;
+            }
+          }, []);
+
+          // Generate share link
+          useEffect(() => {
+            if (selectedSlots.length > 0) {
+              const params = new URLSearchParams();
+              params.set('slots', encodeURIComponent(JSON.stringify(selectedSlots)));
+              params.set('sharer_tz', encodeURIComponent(sharerTimezone));
+              setShareLink(`${window.location.origin}${window.location.pathname}?${params.toString()}`);
+            } else {
+              setShareLink('');
+            }
+          }, [selectedSlots, sharerTimezone]);
+
+          const timezones = getPopularTimezones();
+          const hours = Array.from({ length: 24 }, (_, i) => i);
+          const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+          const getDayDate = (dayIndex) => {
+            const date = new Date(weekStart);
+            date.setDate(weekStart.getDate() + dayIndex);
+            return date;
+          };
+
+          const formatTime = (hour) => {
+            if (hour === 0) return '12 AM';
+            if (hour === 12) return '12 PM';
+            if (hour < 12) return `${hour} AM`;
+            return `${hour - 12} PM`;
+          };
+
+          const getSlotId = (dayIndex, hour) => {
+            const date = getDayDate(dayIndex);
+            return `${date.toISOString().split('T')[0]}_${hour}`;
+          };
+
+          const isSlotSelected = (dayIndex, hour) => {
+            const slotId = getSlotId(dayIndex, hour);
+            return selectedSlots.includes(slotId);
+          };
+
+          const handleSlotClick = (dayIndex, hour) => {
+            if (isViewingSharedAvailability) return; // Read-only mode
+            
+            const slotId = getSlotId(dayIndex, hour);
+            
+            setSelectedSlots(prev => {
+              if (prev.includes(slotId)) {
+                return prev.filter(id => id !== slotId);
+              } else {
+                return [...prev, slotId].sort();
+              }
+            });
+          };
+
+          const clearSelection = () => {
+            setSelectedSlots([]);
+          };
+
+          const copyLink = async () => {
+            try {
+              await navigator.clipboard.writeText(shareLink);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch (err) {
+              console.error('Failed to copy link');
+            }
+          };
+
+          const getSelectedSummary = () => {
+            if (selectedSlots.length === 0) return null;
+            
+            const groupedSlots = {};
+            selectedSlots.forEach(slotId => {
+              const [date, hour] = slotId.split('_');
+              if (!groupedSlots[date]) groupedSlots[date] = [];
+              groupedSlots[date].push(parseInt(hour));
+            });
+
+            return Object.entries(groupedSlots).map(([date, hours]) => {
+              const day = new Date(date).toLocaleDateString('en-US', { 
+                weekday: 'short', 
+                month: 'short', 
+                day: 'numeric' 
+              });
+              
+              // Group consecutive hours
+              hours.sort((a, b) => a - b);
+              const ranges = [];
+              let start = hours[0];
+              let end = hours[0];
+              
+              for (let i = 1; i < hours.length; i++) {
+                if (hours[i] === end + 1) {
+                  end = hours[i];
+                } else {
+                  ranges.push(start === end ? formatTime(start) : `${formatTime(start)}-${formatTime(end + 1)}`);
+                  start = end = hours[i];
+                }
+              }
+              ranges.push(start === end ? formatTime(start) : `${formatTime(start)}-${formatTime(end + 1)}`);
+              
+              return `${day}: ${ranges.join(', ')}`;
+            });
+          };
+
+          const formatSharerTime = () => {
+            try {
+              return sharerCurrentTime.toLocaleString('en-US', {
+                timeZone: sharerTimezone,
+                weekday: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              });
+            } catch (e) {
+              return 'Invalid timezone';
+            }
+          };
+
+          const getTimezoneLabel = (tz) => {
+            const timezone = timezones.find(zone => zone.value === tz);
+            return timezone ? timezone.label : tz.replace('_', ' ').replace('/', ' / ');
+          };
+
+          return React.createElement('div', { className: "min-h-screen bg-gray-50 p-4" },
+            React.createElement('div', { className: "max-w-4xl mx-auto" },
+              // Header
+              React.createElement('div', { className: "bg-white rounded-lg shadow-sm p-4 mb-4" },
+                React.createElement('div', { className: "flex items-center justify-between mb-4" },
+                  React.createElement('div', { className: "flex items-center gap-2" },
+                    React.createElement(Calendar, { className: "text-blue-600", size: 24 }),
+                    React.createElement('h1', { className: "text-xl font-semibold text-gray-900" },
+                      isViewingSharedAvailability ? 'Shared Availability' : 'My Availability'
+                    )
+                  ),
+                  
+                  // Sharer's Current Time Clock
+                  isViewingSharedAvailability && sharerTimezone && React.createElement('div', { className: "flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-lg" },
+                    React.createElement(Clock, { size: 16, className: "text-blue-600" }),
+                    React.createElement('div', { className: "text-sm" },
+                      React.createElement('div', { className: "font-medium text-blue-900" }, "Their time now:"),
+                      React.createElement('div', { className: "text-blue-700 font-mono" }, formatSharerTime())
+                    )
+                  )
+                ),
+                
+                // Timezone Information
+                React.createElement('div', { className: "space-y-3" },
+                  // Your Timezone
+                  React.createElement('div', { className: "flex items-center gap-2" },
+                    React.createElement(User, { size: 16, className: "text-green-600" }),
+                    React.createElement('span', { className: "text-sm font-medium text-gray-700" }, "Your timezone:"),
+                    React.createElement('select', { 
+                      value: viewerTimezone, 
+                      onChange: (e) => setViewerTimezone(e.target.value),
+                      className: "border border-gray-300 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
+                    }, timezones.map(tz => React.createElement('option', { key: tz.value, value: tz.value }, tz.label)))
+                  ),
+
+                  // Sharer's Timezone (when viewing shared availability)
+                  isViewingSharedAvailability && sharerTimezone && React.createElement('div', { className: "flex items-center gap-2" },
+                    React.createElement(Users, { size: 16, className: "text-blue-600" }),
+                    React.createElement('span', { className: "text-sm font-medium text-gray-700" }, "Shared by someone in:"),
+                    React.createElement('span', { className: "text-sm text-blue-600 font-medium" }, getTimezoneLabel(sharerTimezone))
+                  ),
+                  
+                  // Clear selection button
+                  selectedSlots.length > 0 && !isViewingSharedAvailability && React.createElement('button', { 
+                    onClick: clearSelection,
+                    className: "text-red-600 text-sm hover:text-red-700 underline"
+                  }, "Clear Selection")
+                )
+              ),
+
+              // Calendar Grid
+              React.createElement('div', { className: "bg-white rounded-lg shadow-sm overflow-hidden" },
+                React.createElement('div', { className: "grid grid-cols-8 border-b border-gray-200" },
+                  React.createElement('div', { className: "p-2 border-r border-gray-200 text-sm font-medium text-gray-600" }),
+                  ...days.map((day, index) => React.createElement('div', { 
+                    key: day, 
+                    className: "p-2 text-center border-r border-gray-200 text-sm font-medium text-gray-600"
+                  },
+                    React.createElement('div', {}, day),
+                    React.createElement('div', { className: "text-xs text-gray-400" }, getDayDate(index).getDate())
+                  ))
+                ),
+
+                React.createElement('div', { ref: scrollContainerRef, className: "max-h-96 overflow-y-auto" },
+                  ...hours.map(hour => React.createElement('div', { 
+                    key: hour, 
+                    className: "grid grid-cols-8 border-b border-gray-100 hover:bg-gray-50"
+                  },
+                    React.createElement('div', { className: "p-2 border-r border-gray-200 text-xs text-gray-500 font-medium" }, formatTime(hour)),
+                    ...days.map((_, dayIndex) => React.createElement('div', {
+                      key: `${dayIndex}-${hour}`,
+                      className: `h-12 border-r border-gray-100 transition-colors select-none ${
+                        isSlotSelected(dayIndex, hour) 
+                          ? 'bg-blue-500 hover:bg-blue-600' 
+                          : 'hover:bg-blue-50'
+                      } ${isViewingSharedAvailability ? 'cursor-default' : 'cursor-pointer'}`,
+                      onClick: () => handleSlotClick(dayIndex, hour)
+                    }))
+                  ))
+                )
+              ),
+
+              // Selection Summary
+              selectedSlots.length > 0 && React.createElement('div', { className: "bg-white rounded-lg shadow-sm p-4 mt-4" },
+                React.createElement('h3', { className: "font-medium text-gray-900 mb-2" },
+                  isViewingSharedAvailability ? 'Available Times:' : 'Selected Availability:'
+                ),
+                React.createElement('div', { className: "space-y-1 text-sm text-gray-600 mb-4" },
+                  ...getSelectedSummary()?.map((summary, index) => React.createElement('div', { key: index }, summary)) || []
+                ),
+                
+                !isViewingSharedAvailability && shareLink && React.createElement('div', { className: "border-t pt-4" },
+                  React.createElement('p', { className: "text-sm text-gray-600 mb-2" }, "Share this link:"),
+                  React.createElement('div', { className: "flex gap-2" },
+                    React.createElement('input', { 
+                      type: "text", 
+                      value: shareLink, 
+                      readOnly: true,
+                      className: "flex-1 text-xs bg-gray-50 border border-gray-300 rounded px-3 py-2"
+                    }),
+                    React.createElement('button', { 
+                      onClick: copyLink,
+                      className: "flex items-center gap-1 bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 transition-colors"
+                    },
+                      copied ? React.createElement(Check, { size: 16 }) : React.createElement(Copy, { size: 16 }),
+                      copied ? 'Copied!' : 'Copy'
+                    )
+                  )
+                )
+              ),
+
+              // Instructions
+              React.createElement('div', { className: "text-center text-sm text-gray-500 mt-6" },
+                isViewingSharedAvailability 
+                  ? `Viewing availability shared by someone in ${getTimezoneLabel(sharerTimezone)}. Times shown in your timezone.`
+                  : 'Click individual hour slots to select your availability. Share the generated link with others.'
+              )
+            )
+          );
+        };
+
+        ReactDOM.render(React.createElement(TimezoneScheduler), document.getElementById('root'));
+    </script>
+</body>
+</html>
